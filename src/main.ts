@@ -218,7 +218,7 @@ function frame(now: number) {
   if (gui.autoRotLight) {
     lx = Math.cos(t * 0.8) * 4.5;
     lz = Math.sin(t * 0.8) * 4.5;
-    updateLightDisplay(lx, lz);
+    //updateLightDisplay(lx, lz); THAT IS NOT ANYMORE IN THE FINAL VERSION ACCORIDIGN TO THE EXAMPLE 
   }
 
   const [or, og, ob] = hexToRgb(gui.objectColor);

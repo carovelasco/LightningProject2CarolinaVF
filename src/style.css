@@ -5,65 +5,249 @@ html, body {
   height: 100%;
   overflow: hidden;
   font-family: system-ui, -apple-system, sans-serif;
-  background: #0d0d14;
+  background: #0d0e14;
+  color: #c8d0e0;
 }
 
 canvas {
   display: block;
+  position: fixed;
+  top: 0; left: 0;
   width: 100%;
   height: 100%;
+  z-index: 0;
 }
 
-/* ── GUI overlay ── */
-#gui {
+ 
+/* LEFT PANEL */
+#left-panel {
   position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 100;
-  pointer-events: none;
+  top: 0; left: 0;
+  width: 220px;
+  height: 100%;
+  background: #111318;
+  border-right: 1px solid #1e2230;
+  z-index: 10;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2e40 transparent;
 }
-
-.gui-panel {
-  pointer-events: all;
-  background: rgba(10, 10, 18, 0.88);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 12px;
-  padding: 16px 18px;
-  color: #e0e8ff;
-  width: 270px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+ 
+/*  RIGHT PANEL */
+#right-panel {
+  position: fixed;       
+  top: 0; right: 0;      
+  width: 280px;           
+  height: 100%;           
+  background: #111318;    
+  border-left: 1px solid #1e2230;  
+  z-index: 10;           
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2e40 transparent;
 }
-
-.gui-title {
-  font-size: 15px;
+ 
+/* Shared panel elements  */
+.panel-title {
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  margin-bottom: 14px;
-  color: #a8c8ff;
-}
-
-.gui-section {
-  margin-bottom: 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  padding-bottom: 14px;
-}
-
-.gui-section:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-
-.gui-label {
-  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #e4eaff;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid #1e2230;
   text-transform: uppercase;
+}
+ 
+.panel-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid #1a1d28;
+}
+ 
+.section-label {
+  font-size: 9.5px;
+  font-weight: 700;
   letter-spacing: 0.12em;
-  color: #6888bb;
+  text-transform: uppercase;
+  color: #4a5578;
   margin-bottom: 8px;
 }
 
-/* ── Shading model buttons ── */
+/* ── Buttons ── */
+.btn-row {
+  display: flex;
+  gap: 6px;
+}
+ 
+.pill-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #2a3050;
+  border-radius: 5px;
+  background: #181c28;
+  color: #8fa8d8;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.pill-btn:hover {
+  background: #1e2540;
+  border-color: #3a4870;
+  color: #c0d4ff;
+}
+ 
+
+/* ── File input ── */
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+ 
+.file-btn {
+  padding: 5px 10px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px solid #2a3050;
+  border-radius: 4px;
+  background: #181c28;
+  color: #8fa8d8;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.file-btn:hover {
+  background: #1e2540;
+}
+
+
+/* ── Left panel color row ── */
+.color-row-left {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #6888bb;
+}
+.color-row-left input[type="color"] {
+  width: 44px;
+  height: 22px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+ 
+
+/*  RIGHT PANEL — SCENE LIST */
+.scene-list {
+  flex-shrink: 0;
+  flex-direction: column;
+  max-height: 160px;   
+  overflow-y: auto;
+  display: flex; 
+  border-bottom: 1px solid #1a1d28;
+  padding: 6px 10px; 
+  scrollbar-width: thin;
+  scrollbar-color: #2a2e40 transparent;
+  gap: 6px;   
+}
+ 
+.scene-item {
+  padding: 9px 14px;
+  font-size: 11.5px;
+  color: #8a9abf;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #1e2535;     
+  border-radius: 6px; 
+  transition: background 0.1s, color 0.1s;
+}
+.scene-item:hover { background: #16192a; color: #c0d0f0; }
+.scene-item.active {
+  background: #1a2848;
+  color: #d0e4ff;
+  border-left: 2px solid #3a70d0;
+}
+ 
+.scene-idx {
+  color: #3a4a6a;
+  font-size: 10px;
+  min-width: 14px;
+}
+ 
+/* ── Scene action buttons ── */
+.scene-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 8px 10px;  
+  border-bottom: 1px solid #1a1d28;
+}
+ 
+.scene-act-btn {
+  width: 100%;
+  padding: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #2a3050;
+  border-radius: 6px;
+  background: #181c28;
+  color: #8fa8d8;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.scene-act-btn:hover { background: #1e2540; }
+.scene-act-btn.danger {
+  border-color: #501818;
+  color: #c04040;
+  background: #1a1010;
+}
+.scene-act-btn.danger:hover { background: #2a1010; }
+
+
+/*config of objects*/
+.obj-sliders {
+  flex: 1;
+  overflow-y: auto;    
+  scrollbar-width: thin;
+  scrollbar-color: #2a2e40 transparent;
+  padding-bottom: 20px;
+}
+.obj-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #e4eaff;
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid #1a1d28;
+  text-transform: uppercase;
+}
+.slider-group-title {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #3a4a6a;
+  padding: 10px 14px 4px;
+}
+
+
+
+
+/* ── Shading model buttons ── CAMBIE MODEL-BTN A nombres que use en gui */ 
 .model-btns {
   display: flex;
   gap: 6px;
@@ -94,6 +278,11 @@ canvas {
   background: rgba(74, 158, 255, 0.25);
   color: #d0e8ff;
   border-color: rgba(74, 158, 255, 0.60);
+}
+
+.model-btn.wide {
+  width: 100%;
+  flex: unset;
 }
 
 .model-desc {
@@ -134,6 +323,14 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 
+.slider-row {
+  padding: 2px 14px;   
+}
+
+.slider-label {
+  width: 72px;        
+}
+
 /* ── Checkbox ── */
 .checkbox-row {
   display: flex;
@@ -150,7 +347,7 @@ canvas {
 }
 
 /* ── Color pickers ── */
-.color-row {
+.color-row-left {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -159,7 +356,7 @@ canvas {
   color: #8899bb;
 }
 
-.color-row input[type="color"] {
+.color-row-left input[type="color"] {
   width: 40px;
   height: 24px;
   border: none;
@@ -169,8 +366,8 @@ canvas {
   padding: 0;
 }
 
-/* ── Hint ── */
-.gui-hint {
+/* ── Hint ──  solo camnbie de gui a panel*/
+.panel-hint {
   font-size: 10px;
   color: #445566;
   text-align: center;
