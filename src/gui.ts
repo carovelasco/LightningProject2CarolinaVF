@@ -76,7 +76,7 @@ function updateRightPanel() {
   titleEl.textContent = obj ? obj.type.toUpperCase() : "";
 }
 let _nextId = 1;
-function addObject(type: string) {
+export function addObject(type: string) {
   const id = _nextId++;
   sceneObjects.push({ id, type, label: type.charAt(0).toUpperCase() + type.slice(1) });
   selectedId = id;
@@ -86,10 +86,12 @@ function addObject(type: string) {
 
 //to delete the selected object from the scene-caro
 function deleteSelected() {
+  const idx= sceneObjects.findIndex(o => o.id === selectedId );
   sceneObjects = sceneObjects.filter(o => o.id !== selectedId);
   selectedId = sceneObjects.length > 0 ? sceneObjects[sceneObjects.length - 1].id : -1;
   renderSceneList();
   updateRightPanel();
+  (window as any).__onObjectRemoved?.(idx); 
 }
 
 

@@ -43,9 +43,10 @@ struct Uniforms {
 
 // ── Vertex shader I/O 
 struct VSIn {
-  @location(0) position : vec3<f32>,
-  @location(1) normal   : vec3<f32>,
-  @location(2) uv       : vec2<f32>,
+  @location(0) position    : vec3<f32>,
+  @location(1) normal      : vec3<f32>,
+  @location(2) barycentric : vec3<f32>,
+  @location(3) uv          : vec2<f32>,
 };
 
 struct VSOut {
@@ -56,6 +57,7 @@ struct VSOut {
   // TODO (Gouraud): compute and store the light colour here in vs_main,
   // then read it back in fs_main instead of re-computing lighting per fragment
   @location(3) gouraudColor  : vec3<f32>,
+  @location(4) barycentric   : vec3<f32>,
 };
 
 
@@ -133,6 +135,7 @@ fn vs_main(input: VSIn) -> VSOut {
   out.worldPos    = worldPos4.xyz;
   out.worldNormal = normalize(worldNormal4.xyz);
   out.uv          = input.uv;
+  out.barycentric = input.barycentric;
 
   // TODO (Gouraud): call gouraudLighting() here and store the result.
   // When model_id == 1u, compute lighting per vertex so the fragment shader can just read out.gouraudColor directly without any extra work.

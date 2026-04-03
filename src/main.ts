@@ -5,7 +5,110 @@ import shaderCode from "./shader.wgsl?raw";
 import { Camera } from "./camera";
 import { mat4 } from "./math";
 import type { Vec3 } from "./math";
-import { gui, hexToRgb, initGUI, updateLightDisplay } from "./gui";
+import { gui, hexToRgb, initGUI, addObject} from "./gui";
+
+//FIRST AND SECOND INSTRUCTION-caro
+
+
+// Vertex stride: [x,y,z, nx,ny,nz, bx,by,bz, u,v] — 11 floats = 44 bytes
+// Barycentric coords per corner so wireframe mode can detect edges in the shader
+const BARY: [number,number,number][] = [[1,0,0],[0,1,0],[0,0,1]];
+ 
+// OBJ loader — returns a flat (non-indexed) vertex array and bounding sphere info
+function parseOBJ(text: string) {
+  const pos: [number,number,number][] = [];
+  const nrm: [number,number,number][] = [];
+  const uvs: [number,number][]        = [];
+  const verts: number[] = [];
+ 
+  // temp storage for triangles before we know if normals exist
+  type Tri = [[number,number,number],[number,number,number],[number,number]][];
+  const tris: Tri[] = [];
+  let hasNormals = false;
+ 
+  const resolve = (s: string, len: number) => {
+    const n = parseInt(s);
+    return isNaN(n) ? -1 : n < 0 ? len + n : n - 1;
+  };
+ 
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line[0] === "#") continue;
+    const p = line.split(/\s+/);
+ 
+    if (p[0] === "v")  pos.push([+p[1], +p[2], +p[3]]);
+    if (p[0] === "vn") { nrm.push([+p[1], +p[2], +p[3]]); hasNormals = true; }
+    if (p[0] === "vt") uvs.push([+p[1], +(p[2] ?? 0)]);
+    if (p[0] === "f") {
+      const corners = p.slice(1).map(tok => {
+        const t  = tok.split("/");
+        const pi = resolve(t[0], pos.length);
+        const ui = t.length > 1 && t[1] !== "" ? resolve(t[1], uvs.length)  : -1;
+        const ni = t.length > 2 && t[2] !== "" ? resolve(t[2], nrm.length)  : -1;
+        return [
+          pos[pi] ?? [0,0,0] as [number,number,number],
+          ni >= 0 ? nrm[ni] : [0,1,0] as [number,number,number],
+          ui >= 0 ? uvs[ui] : [0,0]   as [number,number],
+        ] as [number,number,number][]; // typed loosely, fixed below
+      });
+      // fan triangulation — works for tris and quads
+      for (let i = 1; i + 1 < corners.length; i++)
+        tris.push([corners[0], corners[i], corners[i+1]] as unknown as Tri);
+    }
+  }
+ 
+  // if no normals in file, compute face normals per vertex (averaged)
+  if (!hasNormals) {
+    const acc = new Map<string, [number,number,number]>();
+    for (const tri of tris) {
+      const [p0,,] = tri[0] as any, [p1,,] = tri[1] as any, [p2,,] = tri[2] as any;
+      const e1 = [p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2]];
+      const e2 = [p2[0]-p0[0], p2[1]-p0[1], p2[2]-p0[2]];
+      const fn: [number,number,number] = [
+        e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]
+      ];
+      for (const c of tri as any) {
+        const k = (c[0] as number[]).join();
+        const a = acc.get(k) ?? [0,0,0] as [number,number,number];
+        acc.set(k, [a[0]+fn[0], a[1]+fn[1], a[2]+fn[2]]);
+      }
+    }
+    for (const tri of tris as any)
+      for (const c of tri) {
+        const a = acc.get((c[0] as number[]).join())!;
+        const l = Math.sqrt(a[0]**2+a[1]**2+a[2]**2) || 1;
+        c[1] = [a[0]/l, a[1]/l, a[2]/l];
+      }
+  }
+ 
+  // pack into flat vertex buffer
+  for (const tri of tris as any)
+    for (let i = 0; i < 3; i++) {
+      const [p, n, uv] = tri[i];
+      verts.push(...p, ...n, ...BARY[i], uv[0], uv[1]);
+    }
+ 
+  // bounding sphere
+  let minX= Infinity, minY= Infinity, minZ= Infinity;
+  let maxX=-Infinity, maxY=-Infinity, maxZ=-Infinity;
+  for (const [x,y,z] of pos) {
+    if (x<minX) minX=x; if (x>maxX) maxX=x;
+    if (y<minY) minY=y; if (y>maxY) maxY=y;
+    if (z<minZ) minZ=z; if (z>maxZ) maxZ=z;
+  }
+  const cx=(minX+maxX)/2, cy=(minY+maxY)/2, cz=(minZ+maxZ)/2;
+  let radius = 0;
+  for (const [x,y,z] of pos) {
+    const d = Math.sqrt((x-cx)**2+(y-cy)**2+(z-cz)**2);
+    if (d > radius) radius = d;
+  }
+ 
+  return { verts: new Float32Array(verts), count: verts.length/11, cx, cy, cz, radius };
+}
+ 
+
+
+
 
 
 //WebGPU init
@@ -29,7 +132,7 @@ function resize() {
   context.configure({ device, format, alphaMode: "premultiplied" });
   depthTexture?.destroy();
   depthTexture = device.createTexture({
-    size: [canvas.width, canvas.height],
+    size: [canvas.width, canvas.height], 
     format: "depth24plus",
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
@@ -65,60 +168,49 @@ function generateCube(): Float32Array {
       data.push(v[3], v[4]);// uv
     }
   }
-  return new Float32Array(data);
+  const vd = new Float32Array(data);
+  const id = new Uint32Array(vd.length / 8).map((_, i) => i); // sequential indices
+  return { vd, id };
 }
 
-function generateSphere(stacks: number, slices: number): Float32Array {
-  function vert(phi: number, theta: number): number[] {
-    const x = Math.sin(phi) * Math.cos(theta);
-    const y = Math.cos(phi);
-    const z = Math.sin(phi) * Math.sin(theta);
-    const u = theta / (2 * Math.PI);
-    const v = phi   / Math.PI;
-    return [x, y, z,  x, y, z,  u, v]; // pos, normal, uv
+function generateSphere(stacks: number, slices: number): { vd: Float32Array; id: Uint32Array } {
+  const verts: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i <= stacks; i++) {
+    const phi = (i / stacks) * Math.PI;
+    for (let j = 0; j <= slices; j++) {
+      const theta = (j / slices) * 2 * Math.PI;
+      const x = Math.sin(phi)*Math.cos(theta), y = Math.cos(phi), z = Math.sin(phi)*Math.sin(theta);
+      verts.push(x,y,z, x,y,z, j/slices, i/stacks);
+    }
   }
-
-  const quads: Array<{ verts: number[][] }> = [];
-
   for (let i = 0; i < stacks; i++) {
-    const phi0 = (i     / stacks) * Math.PI;
-    const phi1 = ((i+1) / stacks) * Math.PI;
-
     for (let j = 0; j < slices; j++) {
-      const t0 = (j     / slices) * 2 * Math.PI;
-      const t1 = ((j+1) / slices) * 2 * Math.PI;
-
-      const v00 = vert(phi0, t0);
-      const v10 = vert(phi1, t0);
-      const v01 = vert(phi0, t1);
-      const v11 = vert(phi1, t1);
-
-      // Dos triángulos por quad 
-      quads.push({ verts: [v00, v10, v11, v00, v11, v01] });
+      const a = i*(slices+1)+j, b = a+1, c = a+(slices+1), d = c+1;
+      idx.push(a,c,b, b,c,d);
     }
   }
-
-  const data: number[] = [];
-  for (const quad of quads) {
-    for (const v of quad.verts) {
-      data.push(...v);
-    }
-  }
-  return new Float32Array(data);
+  return { vd: new Float32Array(verts), id: new Uint32Array(idx) };
 }
+
 
 
 // Geometry buffers — rebuilt when the user switches shape
 let activeShape: "cube" | "sphere" = "cube";
+let meshCenter: [number,number,number] = [0,0,0];
+
 
 function buildVertexBuffer(shape: "cube" | "sphere"): { buf: GPUBuffer; count: number } {
-  const data = shape === "cube" ? generateCube() : generateSphere(64, 64);
+  meshCenter = [0,0,0];
+
+  const { vd, id } = shape === "cube" ? generateCube() : generateSphere(64, 64);
+  const { verts, count } = expandToFlat(vd, id);
   const buf = device.createBuffer({
-    size: data.byteLength,
+    size: verts.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   });
-  device.queue.writeBuffer(buf, 0, data);
-  return { buf, count: data.length / 8 };
+  device.queue.writeBuffer(buf, 0, verts);
+  return { buf, count };
 }
 
 let { buf: vertexBuffer, count: vertexCount } = buildVertexBuffer("cube");
@@ -162,11 +254,12 @@ const pipeline = device.createRenderPipeline({
     module: shader,
     entryPoint: "vs_main",
     buffers: [{
-      arrayStride: 8 * 4,
+      arrayStride: 11 * 4,//it was8 bfre
       attributes: [
         { shaderLocation: 0, offset: 0,     format: "float32x3" }, // position
         { shaderLocation: 1, offset: 3 * 4, format: "float32x3" }, // normal
-        { shaderLocation: 2, offset: 6 * 4, format: "float32x2" }, // uv
+        { shaderLocation: 2, offset: 6 * 4, format: "float32x3" }, // barycentric
+        { shaderLocation: 3, offset: 9 * 4, format: "float32x2" }, // uv
       ],
     }],
   },
@@ -181,12 +274,115 @@ const bindGroup = device.createBindGroup({
 });
 
 
+// ── Scene list
+
+
+class MeshObject {
+  vertexBuffer: GPUBuffer;
+  drawCount:    number;
+  center:       [number,number,number];
+  uniformBuf:   GPUBuffer;
+  bindGroup:    GPUBindGroup;
+ 
+  private _uab  = new ArrayBuffer(UNIFORM_SIZE);
+  private _uf32 = new Float32Array(this._uab);
+  private _uu32 = new Uint32Array(this._uab);
+ 
+  constructor(verts: Float32Array, count: number, center: [number,number,number] = [0,0,0]) {
+    this.drawCount = count;
+    this.center    = center;
+ 
+    this.vertexBuffer = device.createBuffer({
+      size: verts.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(this.vertexBuffer, 0, verts);
+ 
+    this.uniformBuf = device.createBuffer({
+      size: UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+ 
+    this.bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: { buffer: this.uniformBuf } }],
+    });
+  }
+ 
+  uploadUniforms(
+    proj: Float32Array, view: Float32Array, t: number,
+    lx: number, ly: number, lz: number,
+    lr: number, lg: number, lb: number,
+    or: number, og: number, ob: number,
+  ) {
+    const [cx, cy, cz] = this.center;
+    const model = mat4.translation(-cx, -cy, -cz);
+    const normM = mat4.normalMatrix(model);
+    const mvp   = mat4.multiply(mat4.multiply(proj, view), model);
+ 
+    this._uf32.set(mvp,   0);
+    this._uf32.set(model, 16);
+    this._uf32.set(normM, 32);
+    this._uf32[48]=lx; this._uf32[49]=ly; this._uf32[50]=lz; this._uf32[51]=0;
+    this._uf32[52]=lr; this._uf32[53]=lg; this._uf32[54]=lb; this._uf32[55]=0;
+    this._uf32[56]=gui.ambient;   this._uf32[57]=gui.diffuse;
+    this._uf32[58]=gui.specular;  this._uf32[59]=gui.shininess;
+    this._uf32[60]=camera.position[0]; this._uf32[61]=camera.position[1]; this._uf32[62]=camera.position[2];
+    this._uu32[63]=gui.modelId;
+    this._uf32[64]=or; this._uf32[65]=og; this._uf32[66]=ob;
+    this._uf32[67]=t;
+ 
+    device.queue.writeBuffer(this.uniformBuf, 0, this._uab);
+  }
+ 
+  destroy() {
+    this.vertexBuffer.destroy();
+    this.uniformBuf.destroy();
+  }
+}
+
+  //list
+const sceneObjects: MeshObject[] = [];
+
 // GUI----------------------------------------------------------------------------------------------INIT GUI--------------------------------------------
 initGUI(shape => {
-  activeShape = shape;
-  vertexBuffer.destroy();
-  ({ buf: vertexBuffer, count: vertexCount } = buildVertexBuffer(shape));
+  const { vd, id } = shape === "cube" ? generateCube() : generateSphere(64, 64);
+  const { verts, count } = expandToFlat(vd, id);
+  sceneObjects.push(new MeshObject(verts, count, [0,0,0]));
+
 });
+
+//for obj -------------------------
+(window as any).__onObjectRemoved = (index) => {
+  vertexBuffer.destroy();
+  vertexBuffer = device.createBuffer({ 
+    size: 4,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST 
+  });
+  vertexCount = 0;
+  meshCenter = [0, 0, 0];
+};
+
+document.getElementById("obj-file-input")?.addEventListener("change", async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const { verts, count, cx, cy, cz, radius } = parseOBJ(await file.text());
+  addObject(file.name.replace(".obj", ""));
+
+  vertexBuffer.destroy();
+  vertexBuffer = device.createBuffer({ size: verts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(vertexBuffer, 0, verts);
+  vertexCount = count;
+ 
+  // center mesh at origin, place camera so the whole object is visible
+  meshCenter = [cx, cy, cz];
+  camera.position = [0, 0, radius * 2.5]; //center camara in obj
+  camera.yaw   = -Math.PI / 2;
+  camera.pitch = 0;
+ 
+  console.log(`${file.name}: ${count/3} tris, centre=[${cx.toFixed(1)},${cy.toFixed(1)},${cz.toFixed(1)}], r=${radius.toFixed(1)}`);
+});
+
 
 // Camera
 const camera = new Camera();
@@ -208,9 +404,9 @@ function frame(now: number) {
   camera.update(keys, dt);
 
   const aspect = canvas.width / canvas.height;
-  const proj   = mat4.perspective((60 * Math.PI) / 180, aspect, 0.1, 100);
+  const proj   = mat4.perspective((60 * Math.PI) / 180, aspect, 0.1, 1000);//1000 instead 0f 100 so it fits
   const view   = camera.getViewMatrix();
-  const model  = mat4.identity();
+  const model  = mat4.translation(-meshCenter[0], -meshCenter[1], -meshCenter[2]);//c
   const normM  = mat4.normalMatrix(model);
   const mvp    = mat4.multiply(mat4.multiply(proj, view), model);
 
@@ -251,13 +447,37 @@ function frame(now: number) {
   });
 
   pass.setPipeline(pipeline);
-  pass.setBindGroup(0, bindGroup);
-  pass.setVertexBuffer(0, vertexBuffer);
-  pass.draw(vertexCount);
-  pass.end();
+  for (const obj of sceneObjects) {
+    obj.uploadUniforms(proj, view, t, lx, ly, lz, lr, lg, lb, or, og, ob);
+    pass.setBindGroup(0, obj.bindGroup);
+    pass.setVertexBuffer(0, obj.vertexBuffer);
+    pass.draw(obj.drawCount);
+  }
 
+  pass.end();
   device.queue.submit([encoder.finish()]);
   requestAnimationFrame(frame);
+}
+
+//caro
+// Expands indexed 8-float geometry to 11-float vertices with barycentric coords
+function expandToFlat(vertData: Float32Array, indexData: Uint32Array): { verts: Float32Array; count: number } {
+  const triCount = indexData.length / 3;
+  const out = new Float32Array(triCount * 3 * 11);
+
+  for (let t = 0; t < triCount; t++) {
+    for (let c = 0; c < 3; c++) {
+      const vi  = indexData[t * 3 + c];
+      const dst = (t * 3 + c) * 11;
+      out[dst+0]=vertData[vi*8+0]; out[dst+1]=vertData[vi*8+1]; out[dst+2]=vertData[vi*8+2];
+      out[dst+3]=vertData[vi*8+3]; out[dst+4]=vertData[vi*8+4]; out[dst+5]=vertData[vi*8+5];
+      // barycentric corner (1,0,0) / (0,1,0) / (0,0,1)
+      out[dst+6]=BARY[c][0]; out[dst+7]=BARY[c][1]; out[dst+8]=BARY[c][2];
+      out[dst+9]=vertData[vi*8+6]; out[dst+10]=vertData[vi*8+7];
+    }
+  }
+
+  return { verts: out, count: out.length / 11 };
 }
 
 requestAnimationFrame(frame);
