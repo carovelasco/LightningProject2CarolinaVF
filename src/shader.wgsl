@@ -37,9 +37,15 @@ struct Uniforms {
 
   objectColor : vec3<f32>,   // Base colour of the object
   time        : f32,         // Elapsed seconds
+  use_texture : u32,   // ← agregar
+  _p4 : f32,
+  _p5 : f32,
+  _p6 : f32,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
+@group(0) @binding(1) var tex_samp : sampler;
+@group(0) @binding(2) var tex_img  : texture_2d<f32>;
 
 // ── Vertex shader I/O 
 struct VSIn {
@@ -102,17 +108,27 @@ fn flatShading(fragWorldPos: vec3<f32>) -> vec3<f32> {
 fn gouraudLighting(N: vec3<f32>, vertWorldPos: vec3<f32>) -> vec3<f32> {
   // TODO: implement Gouraud lighting.
   // Placeholder — shows magenta so it is not finished
-  return vec3<f32>(1.0, 0.0, 1.0);
+  return vec3<f32>(1.0,1.0, 1.0);
 }
 
 
-// ── TODO 2 of 3: Phong shading 
+// ── TODO 2 of 3: Phong shading DONEEEEEEEEEEEEEEEE*****
 // Called ONCE PER FRAGMENT in fs_main.
-fn phongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>) -> vec3<f32> {
+fn phongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>, baseColor: vec3<f32>) -> vec3<f32> {
   // TODO: implement Phong per-fragment lighting.
-  // Placeholder — shows cyan so it is not finished
-  return vec3<f32>(0.0, 1.0, 1.0);
+  let L = normalize(u.lightPos - fragWorldPos);
+  let V = normalize(u.camPos   - fragWorldPos);
+  let ambientC  = u.ambient * u.lightColor;
+  let NdotL     = max(dot(N, L), 0.0);
+  let diffuseC  = u.diffuse * NdotL * u.lightColor;
+  var specularC = vec3<f32>(0.0);
+  if NdotL > 0.0 {
+    let R = reflect(-L, N);
+    specularC = u.specular * pow(max(dot(R, V), 0.0), u.shininess) * u.lightColor;
+  }
+  return (ambientC + diffuseC + specularC) * baseColor;
 }
+
 
 // ── TODO 3 of 3: Blinn-Phong shading 
 // Called ONCE PER FRAGMENT in fs_main.
@@ -156,6 +172,11 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
   var color: vec3<f32>;
   let N = normalize(input.worldNormal);  // smooth interpolated normal
 
+  var baseColor = u.objectColor;
+  if u.use_texture == 1u {
+    baseColor = textureSample(tex_img, tex_samp, input.uv).rgb;
+  }
+
   switch u.model_id {
     case 0u: {
       // Flat — already done, use as reference
@@ -164,10 +185,17 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     case 1u: {
       // Gouraud — colour was computed per-vertex and interpolated by GPU
       color = input.gouraudColor;
+      if u.use_texture == 1u {
+      color = color * textureSample(tex_img, tex_samp, input.uv).rgb;
+  }
     }
     case 2u: {
       // Phong — implement phongLighting() above
-      color = phongLighting(N, input.worldPos);
+      color = phongLighting(N, input.worldPos, baseColor);
+    }
+    case 5u: {
+      let tc = textureSample(tex_img, tex_samp, input.uv).rgb;
+      color = phongLighting(N, input.worldPos, tc); 
     }
     default: {
       // Blinn-Phong — implement blinnPhongLighting() above

@@ -33,7 +33,7 @@ function parseOBJ(text: string) {
     const p = line.split(/\s+/);
  
     if (p[0] === "v")  pos.push([+p[1], +p[2], +p[3]]);
-    if (p[0] === "vn") { nrm.push([+p[1], +p[2], +p[3]]); hasNormals = true; }
+    if (p[0] === "vn") { nrm.push([+p[1], +p[2], +p[3]]);}// hasNormals = true; } so the normals r calc by me always
     if (p[0] === "vt") uvs.push([+p[1], +(p[2] ?? 0)]);
     if (p[0] === "f") {
       const corners = p.slice(1).map(tok => {
@@ -237,12 +237,23 @@ const uArrayBuf = new ArrayBuffer(UNIFORM_SIZE);
 const uData     = new Float32Array(uArrayBuf);
 const uData32   = new Uint32Array(uArrayBuf);
 
+const bindGroupLayout = device.createBindGroupLayout({
+  entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+  ],
+});
+
+const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "repeat" });
+
+
 // Pipeline
 const shader = device.createShaderModule({ label: "Lighting Shader", code: shaderCode });
 
 const pipeline = device.createRenderPipeline({
   label: "Lighting Pipeline",
-  layout: "auto",
+  layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
   vertex: {
     module: shader,
     entryPoint: "vs_main",
@@ -265,6 +276,18 @@ const pipeline = device.createRenderPipeline({
 const camera = new Camera();
 camera.position = [0, 0, 5];
 
+//texture part
+
+function createDefaultTexture(): GPUTexture {
+  const tex = device.createTexture({
+    size: [1, 1],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  device.queue.writeTexture({ texture: tex }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+  return tex;
+}
+
 // ── Scene list
 
 class MeshObject {
@@ -275,6 +298,8 @@ class MeshObject {
   bindGroup:    GPUBindGroup;
   transform = { tx:0, ty:0, tz:0, rx:0, ry:0, rz:0, sx:1, sy:1, sz:1 };
   boundingRadius: number = 1;
+  texture: GPUTexture;
+  useTexture = 0;
  
   private _uab  = new ArrayBuffer(UNIFORM_SIZE);
   private _uf32 = new Float32Array(this._uab);
@@ -283,8 +308,7 @@ class MeshObject {
   constructor(verts: Float32Array, count: number, center: [number,number,number] = [0,0,0], radius = 1) {
     this.drawCount = count;
     this.center    = center;          // local-space bounding centre
-    this.boundingRadius = radius;
- 
+    this.boundingRadius = radius; 
     this.vertexBuffer = device.createBuffer({
       size: verts.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
@@ -295,12 +319,9 @@ class MeshObject {
       size: UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
- 
-    this.bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.uniformBuf } }],
-    });
-  }
+    this.texture   = createDefaultTexture();
+    this.bindGroup = this.createBindGroup();
+}
   // Arcball state
   arcballBase: Quat = quat.identity();      
   arcballDrag: Quat = quat.identity();      
@@ -353,10 +374,29 @@ class MeshObject {
     this._uu32[63]=gui.modelId;
     this._uf32[64]=or; this._uf32[65]=og; this._uf32[66]=ob;
     this._uf32[67]=t;
+    this._uu32[68] = this.useTexture;
  
     device.queue.writeBuffer(this.uniformBuf, 0, this._uab);
   }
  
+  private createBindGroup(): GPUBindGroup {
+  return device.createBindGroup({
+    layout: bindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: this.uniformBuf } },
+      { binding: 1, resource: sampler },
+      { binding: 2, resource: this.texture.createView() },
+    ],
+  });
+}
+
+setTexture(tex: GPUTexture) {
+  this.texture.destroy();
+  this.texture = tex;
+  this.useTexture = 1;
+  this.bindGroup = this.createBindGroup();
+}
+
   destroy() {
     this.vertexBuffer.destroy();
     this.uniformBuf.destroy();
@@ -459,6 +499,24 @@ document.getElementById("obj-file-input")?.addEventListener("change", async (e) 
   (e.target as HTMLInputElement).value = "";
 
 });
+document.getElementById("tex-file-input")?.addEventListener("change", async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const bitmap = await createImageBitmap(file, { colorSpaceConversion: "none" });
+  const tex = device.createTexture({
+    size: [bitmap.width, bitmap.height],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: tex }, [bitmap.width, bitmap.height]);
+  const obj = (window as any).__getSelectedObject() as MeshObject | null;
+  obj?.setTexture(tex);
+});
+
+document.getElementById("useTexture")?.addEventListener("change", (e) => {
+  const obj = (window as any).__getSelectedObject() as MeshObject | null;
+  if (obj) obj.useTexture = (e.target as HTMLInputElement).checked ? 1 : 0;
+});
 
 
 const keys = new Set<string>();
@@ -557,5 +615,6 @@ function expandToFlat(vertData: Float32Array, indexData: Uint32Array): { verts: 
 
   return { verts: out, count: out.length / 11 };
 }
+
 
 requestAnimationFrame(frame);
