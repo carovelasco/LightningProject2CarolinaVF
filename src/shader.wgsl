@@ -1,10 +1,13 @@
 // shader.wgsl
 // The uniform struct and vertex pipeline are already wired up for you.
 // model_id values:
-//   0 = Flat implemented
-//   1 = Gouraud TODO
-//   2 = Phong TODO
-//   3 = Blinn-Phong TODO
+//   0 = Gouraud
+//   1 = Phong
+//   2 = Normals
+//   3 = Wireframe
+//   4 = Depth
+//   5 = Texture
+//   6 = UV Coords
 //
 // Useful WGSL built-ins:
 //   normalize(v) — returns unit vector
@@ -15,29 +18,28 @@
 //   dpdx(v), dpdy(v) — screen-space partial derivatives (fragment stage only)
 //   cross(a, b)— cross product
 
-// ── Uniform block
 struct Uniforms {
-  mvp        : mat4x4<f32>,  // Model-View-Projection matrix
-  model      : mat4x4<f32>,  // Model matrix (object -> world space)
-  normalMat  : mat4x4<f32>,  // transpose(inverse(model)) — keeps normals correct under scale
+  mvp        : mat4x4<f32>,
+  model      : mat4x4<f32>,
+  normalMat  : mat4x4<f32>,
 
-  lightPos   : vec3<f32>,    // Light position in world space
+  lightPos   : vec3<f32>,
   _p0        : f32,
 
-  lightColor : vec3<f32>,    // RGB light colour
+  lightColor : vec3<f32>,
   _p1        : f32,
 
-  ambient    : f32,          // Ka — ambient coefficient
-  diffuse    : f32,          // Kd — diffuse coefficient
-  specular   : f32,          // Ks — specular coefficient
-  shininess  : f32,          // n  — specular exponent 
+  ambient    : f32,
+  diffuse    : f32,
+  specular   : f32,
+  shininess  : f32,
 
-  camPos     : vec3<f32>,    // Camera position in world space
-  model_id   : u32,          // Which lighting model to use (0–3)
+  camPos     : vec3<f32>,
+  model_id   : u32,
 
-  objectColor : vec3<f32>,   // Base colour of the object
-  time        : f32,         // Elapsed seconds
-  use_texture : u32,   // ← agregar
+  objectColor : vec3<f32>,
+  time        : f32,
+  use_texture : u32,
   _p4 : f32,
   _p5 : f32,
   _p6 : f32,
@@ -47,7 +49,6 @@ struct Uniforms {
 @group(0) @binding(1) var tex_samp : sampler;
 @group(0) @binding(2) var tex_img  : texture_2d<f32>;
 
-// ── Vertex shader I/O 
 struct VSIn {
   @location(0) position    : vec3<f32>,
   @location(1) normal      : vec3<f32>,
@@ -57,65 +58,31 @@ struct VSIn {
 
 struct VSOut {
   @builtin(position) clipPos : vec4<f32>,
-  @location(0) worldPos      : vec3<f32>,   // fragment position in world space
-  @location(1) worldNormal   : vec3<f32>,   // interpolated world-space normal
+  @location(0) worldPos      : vec3<f32>,
+  @location(1) worldNormal   : vec3<f32>,
   @location(2) uv            : vec2<f32>,
-  // TODO (Gouraud): compute and store the light colour here in vs_main,
-  // then read it back in fs_main instead of re-computing lighting per fragment
   @location(3) gouraudColor  : vec3<f32>,
   @location(4) barycentric   : vec3<f32>,
 };
 
+fn gouraudLighting(N: vec3<f32>, vertWorldPos: vec3<f32>) -> vec3<f32> {
+  let L = normalize(u.lightPos - vertWorldPos);
+  let V = normalize(u.camPos   - vertWorldPos);
 
-//Flat shading
-// Flat shading uses ONE normal per triangle face instead of per-vertex normals.
-// We derive it in the fragment shader using screen-space derivatives:
-//   dpdx(p) = how much world-position changes horizontally across one pixel
-//   dpdy(p) = how much world-position changes vertically
-//   cross(dpdx, dpdy) gives the face normal pointing toward the camera.
+  let ambientC  = u.ambient * u.lightColor;
+  let NdotL     = max(dot(N, L), 0.0);
+  let diffuseC  = u.diffuse * NdotL * u.lightColor;
 
-fn flatShading(fragWorldPos: vec3<f32>) -> vec3<f32> {
-  // Derive the face normal from position derivatives
-  let dx    = dpdx(fragWorldPos);
-  let dy    = dpdy(fragWorldPos);
-  let faceN = normalize(cross(dx, dy));
-
-  // ── Standard lighting terms
-  let L = normalize(u.lightPos - fragWorldPos);  // direction TO the light
-  let V = normalize(u.camPos   - fragWorldPos);  // direction TO the camera
-
-  // Ambient: constant low-level light so dark side isn't pure black
-  let ambientC = u.ambient * u.lightColor;
-
-  // Diffuse: Lambertian — cos(angle between N and L), clamped to [0,1]
-  let NdotL    = max(dot(faceN, L), 0.0);
-  let diffuseC = u.diffuse * NdotL * u.lightColor;
-
-  // Specular: Phong reflection — angle between reflected light and view direction
   var specularC = vec3<f32>(0.0);
   if NdotL > 0.0 {
-    let R = reflect(-L, faceN);                              // perfect mirror direction
-    let RdotV = max(dot(R, V), 0.0);
-    specularC = u.specular * pow(RdotV, u.shininess) * u.lightColor;
+    let R = reflect(-L, N);
+    specularC = u.specular * pow(max(dot(R, V), 0.0), u.shininess) * u.lightColor;
   }
 
   return (ambientC + diffuseC + specularC) * u.objectColor;
 }
 
-// ── TODO 1 of 3: Gouraud shading
-// Called ONCE PER VERTEX in vs_main, not per fragment.
-
-fn gouraudLighting(N: vec3<f32>, vertWorldPos: vec3<f32>) -> vec3<f32> {
-  // TODO: implement Gouraud lighting.
-  // Placeholder — shows magenta so it is not finished
-  return vec3<f32>(1.0,1.0, 1.0);
-}
-
-
-// ── TODO 2 of 3: Phong shading DONEEEEEEEEEEEEEEEE*****
-// Called ONCE PER FRAGMENT in fs_main.
 fn phongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>, baseColor: vec3<f32>) -> vec3<f32> {
-  // TODO: implement Phong per-fragment lighting.
   let L = normalize(u.lightPos - fragWorldPos);
   let V = normalize(u.camPos   - fragWorldPos);
   let ambientC  = u.ambient * u.lightColor;
@@ -129,17 +96,26 @@ fn phongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>, baseColor: vec3<f32>) ->
   return (ambientC + diffuseC + specularC) * baseColor;
 }
 
-
-// ── TODO 3 of 3: Blinn-Phong shading 
-// Called ONCE PER FRAGMENT in fs_main.
-fn blinnPhongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>) -> vec3<f32> {
-  // TODO: implement Blinn-Phong per-fragment lighting.
-  // Placeholder — shows yellow so it is not finished
-  return vec3<f32>(1.0, 1.0, 0.0);
+fn blinnPhongLighting(N: vec3<f32>, fragWorldPos: vec3<f32>, baseColor: vec3<f32>) -> vec3<f32> {
+  let L = normalize(u.lightPos - fragWorldPos);
+  let V = normalize(u.camPos   - fragWorldPos);
+  let ambientC  = u.ambient * u.lightColor;
+  let NdotL     = max(dot(N, L), 0.0);
+  let diffuseC  = u.diffuse * NdotL * u.lightColor;
+  var specularC = vec3<f32>(0.0);
+  if NdotL > 0.0 {
+    let H = normalize(L + V);
+    specularC = u.specular * pow(max(dot(N, H), 0.0), u.shininess) * u.lightColor;
+  }
+  return (ambientC + diffuseC + specularC) * baseColor;
 }
 
-// ── Vertex shader
-// Transforms geometry to clip space and prepares interpolated data for the fragment shader.
+fn wireframeEdgeFactor(bary: vec3<f32>) -> f32 {
+  let d  = fwidth(bary);
+  let a3 = smoothstep(vec3<f32>(0.0), d * 1.5, bary);
+  return min(min(a3.x, a3.y), a3.z);
+}
+
 @vertex
 fn vs_main(input: VSIn) -> VSOut {
   var out: VSOut;
@@ -153,9 +129,7 @@ fn vs_main(input: VSIn) -> VSOut {
   out.uv          = input.uv;
   out.barycentric = input.barycentric;
 
-  // TODO (Gouraud): call gouraudLighting() here and store the result.
-  // When model_id == 1u, compute lighting per vertex so the fragment shader can just read out.gouraudColor directly without any extra work.
-  if u.model_id == 1u {
+  if u.model_id == 0u {
     out.gouraudColor = gouraudLighting(out.worldNormal, out.worldPos);
   } else {
     out.gouraudColor = vec3<f32>(0.0);
@@ -164,13 +138,10 @@ fn vs_main(input: VSIn) -> VSOut {
   return out;
 }
 
-// ── Fragment shader
-// Dispatches to the correct lighting function based on model_id
-// Do NOT need to modify the switch
 @fragment
 fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
   var color: vec3<f32>;
-  let N = normalize(input.worldNormal);  // smooth interpolated normal
+  let N = normalize(input.worldNormal);
 
   var baseColor = u.objectColor;
   if u.use_texture == 1u {
@@ -179,27 +150,36 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
 
   switch u.model_id {
     case 0u: {
-      // Flat — already done, use as reference
-      color = flatShading(input.worldPos);
-    }
-    case 1u: {
-      // Gouraud — colour was computed per-vertex and interpolated by GPU
       color = input.gouraudColor;
       if u.use_texture == 1u {
-      color = color * textureSample(tex_img, tex_samp, input.uv).rgb;
-  }
+        color = color * textureSample(tex_img, tex_samp, input.uv).rgb;
+      }
+    }
+    case 1u: {
+      color = phongLighting(N, input.worldPos, baseColor);
     }
     case 2u: {
-      // Phong — implement phongLighting() above
-      color = phongLighting(N, input.worldPos, baseColor);
+      color = N * 0.5 + vec3<f32>(0.5);
+    }
+    case 3u: {
+      let edgeFactor = wireframeEdgeFactor(input.barycentric);
+      let wireColor = vec3<f32>(0.0, 0.0, 0.0);   
+      let fillColor = vec3<f32>(1.0, 1.0, 1.0);
+      color = mix(wireColor, fillColor, edgeFactor);
+    }
+    case 4u: {
+      let ndcDepth = input.clipPos.z / input.clipPos.w;
+      color = vec3<f32>(ndcDepth);
     }
     case 5u: {
       let tc = textureSample(tex_img, tex_samp, input.uv).rgb;
-      color = phongLighting(N, input.worldPos, tc); 
+      color = phongLighting(N, input.worldPos, tc);
+    }
+    case 6u: {
+      color = vec3<f32>(input.uv, 0.0);
     }
     default: {
-      // Blinn-Phong — implement blinnPhongLighting() above
-      color = blinnPhongLighting(N, input.worldPos);
+      color = blinnPhongLighting(N, input.worldPos, baseColor);
     }
   }
 

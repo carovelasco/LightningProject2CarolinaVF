@@ -313,25 +313,44 @@ export function initGUI(onShapeChange: (shape: "cube" | "sphere") => void) {
 //   });
 
   // Sliders
-  (["ambient", "diffuse", "specular", "shininess", "translateX", "translateY", "translateZ", "rotateX", "rotateY", "rotateZ","scaleX", "scaleY", "scaleZ",] as const).forEach(id => {
-  const el = document.getElementById(id) as HTMLInputElement | null;
-    const valEl = document.getElementById(`${id}-val`)!;
+ 
+  (["translateX", "translateY", "translateZ", "rotateX", "rotateY", "rotateZ", "scaleX", "scaleY", "scaleZ"] as const).forEach(id => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    const valEl = document.getElementById(`${id}-val`);
     if (!el || !valEl) return;
     el.addEventListener("input", () => {
-    (gui as Record<string, number | string | boolean>)[id] = parseFloat(el.value);    
-    valEl.textContent = el.value;
+      (gui as Record<string, number | string | boolean>)[id] = parseFloat(el.value);
+      valEl.textContent = el.value;
     });
   });
 
-  // Checkboxes & colour pickers
-  (document.getElementById("autoRotLight") as HTMLInputElement)
-    ?.addEventListener("change", e => { gui.autoRotLight = (e.target as HTMLInputElement).checked; });
+  (["ambient", "diffuse", "specular", "shininess"] as const).forEach(id => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    const valEl = document.getElementById(`${id}-val`);
+    if (!el || !valEl) return;
+    el.addEventListener("input", () => {
+      const val = parseFloat(el.value);
+      valEl.textContent = el.value;
+      const obj = (window as any).__getSelectedObject?.();
+      if (obj?.material) obj.material[id] = val;
+      else (gui as Record<string, number | string | boolean>)[id] = val;
+    });
+  });
 
   (document.getElementById("objectColor") as HTMLInputElement)
-    .addEventListener("input", e => { gui.objectColor = (e.target as HTMLInputElement).value; });
+    .addEventListener("input", e => {
+      const val = (e.target as HTMLInputElement).value;
+      gui.objectColor = val;
+      const obj = (window as any).__getSelectedObject?.();
+      if (obj?.material) obj.material.color = val;
+    });
 
   (document.getElementById("lightColor") as HTMLInputElement)
     .addEventListener("input", e => { gui.lightColor = (e.target as HTMLInputElement).value; });
+
+  (document.getElementById("autoRotLight") as HTMLInputElement)
+    ?.addEventListener("change", e => { gui.autoRotLight = (e.target as HTMLInputElement).checked; });
+
 
     // Use texture -csro
   (document.getElementById("useTexture") as HTMLInputElement)

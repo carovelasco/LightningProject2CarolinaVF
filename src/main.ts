@@ -2,7 +2,7 @@
 
 import "./style.css";
 import shaderCode from "./shader.wgsl?raw";
-import { Camera } from "./camera";
+//import { Camera } from "./camera";
 import { mat4, quat, screenToSphere, arcballRotation } from "./math";
 import type { Vec3, Quat  } from "./math";
 import { gui, hexToRgb, initGUI, addObject, getSelectedIndex } from "./gui";
@@ -226,7 +226,7 @@ function buildVertexBuffer(shape: "cube" | "sphere"): { buf: GPUBuffer; count: n
 //   256 objectColor vec3  12 B
 //   268 time       f32     4 B
 // ─────────────────────────────────────────────────────────────────────────────
-const UNIFORM_SIZE = 288;
+const UNIFORM_SIZE = 304;
 
 const uniformBuffer = device.createBuffer({
   size: UNIFORM_SIZE,
@@ -272,9 +272,40 @@ const pipeline = device.createRenderPipeline({
   depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
 });
 
-// Camera
-const camera = new Camera();
-camera.position = [0, 0, 5];
+// Camera when no orbital: const camera = new Camera();camera.position = [0, 0, 5];
+// Cámara orbital — reemplaza la Camera de WASD
+const camera = {
+  azimuth:   0,
+  elevation: 0.3,
+  distance:  5.0,
+  target:    [0, 0, 0] as [number, number, number],
+
+  getEyeOffset(): [number, number, number] {
+    const cosE = Math.cos(this.elevation);
+    const sinE = Math.sin(this.elevation);
+    const cosA = Math.cos(this.azimuth);
+    const sinA = Math.sin(this.azimuth);
+    return [
+      this.distance * cosE * sinA,
+      this.distance * sinE,
+      this.distance * cosE * cosA,
+    ];
+  },
+
+  getPosition(): [number, number, number] {
+    const off = this.getEyeOffset();
+    return [
+      this.target[0] + off[0],
+      this.target[1] + off[1],
+      this.target[2] + off[2],
+    ];
+  },
+
+  getViewMatrix(): Float32Array {
+    const pos = this.getPosition();
+    return mat4.lookAt(pos, this.target, [0, 1, 0]);
+  },
+};
 
 //texture part
 
@@ -297,6 +328,7 @@ class MeshObject {
   uniformBuf:   GPUBuffer;
   bindGroup:    GPUBindGroup;
   transform = { tx:0, ty:0, tz:0, rx:0, ry:0, rz:0, sx:1, sy:1, sz:1 };
+  material = { ambient:   0.12, diffuse:   0.75, specular:  0.60, shininess: 32, color:     "#4a9eff" as string,};
   boundingRadius: number = 1;
   texture: GPUTexture;
   useTexture = 0;
@@ -354,7 +386,7 @@ class MeshObject {
     proj: Float32Array, view: Float32Array, t: number,
     lx: number, ly: number, lz: number,
     lr: number, lg: number, lb: number,
-    or: number, og: number, ob: number,
+    camPos: [number,number,number], 
   ) {
     const [cx, cy, cz] = this.center;
     const model  = this.buildModel();
@@ -368,11 +400,12 @@ class MeshObject {
     this._uf32.set(normM, 32);
     this._uf32[48]=lx; this._uf32[49]=ly; this._uf32[50]=lz; this._uf32[51]=0;
     this._uf32[52]=lr; this._uf32[53]=lg; this._uf32[54]=lb; this._uf32[55]=0;
-    this._uf32[56]=gui.ambient;   this._uf32[57]=gui.diffuse;
-    this._uf32[58]=gui.specular;  this._uf32[59]=gui.shininess;
-    this._uf32[60]=camera.position[0]; this._uf32[61]=camera.position[1]; this._uf32[62]=camera.position[2];
-    this._uu32[63]=gui.modelId;
-    this._uf32[64]=or; this._uf32[65]=og; this._uf32[66]=ob;
+    this._uf32[56] = this.material.ambient; this._uf32[57] = this.material.diffuse;
+    this._uf32[58] = this.material.specular;this._uf32[59] = this.material.shininess;
+    this._uf32[60] = camPos[0]; this._uf32[61] = camPos[1]; this._uf32[62] = camPos[2];
+    const [mr, mg, mb] = hexToRgb(this.material.color);
+    this._uu32[63] = gui.modelId; 
+    this._uf32[64] = mr; this._uf32[65] = mg; this._uf32[66] = mb;
     this._uf32[67]=t;
     this._uu32[68] = this.useTexture;
  
@@ -424,40 +457,60 @@ function toNDC(clientX: number, clientY: number): [number, number] {
    -((clientY - rect.top)  / rect.height) *  2 + 1,
   ];
 }
+let camDragging = false;
+let camLastX = 0, camLastY = 0;
 
 canvas.addEventListener("mousedown", e => {
   if (e.button !== 0) return;
   const activeObj = (window as any).__getSelectedObject() as MeshObject | null;
-  if (!activeObj) return;
-  const [nx, ny] = toNDC(e.clientX, e.clientY);
-  activeObj.arcballDragStart = screenToSphere(nx, ny);
-  activeObj.arcballDrag      = quat.identity();
+  if (activeObj) {
+    const [nx, ny] = toNDC(e.clientX, e.clientY);
+    activeObj.arcballDragStart = screenToSphere(nx, ny);
+    activeObj.arcballDrag = quat.identity();
+  } else {
+    camDragging = true;
+    camLastX = e.clientX;
+    camLastY = e.clientY;
+  }
 });
 
 canvas.addEventListener("mousemove", e => {
   const activeObj = (window as any).__getSelectedObject() as MeshObject | null;
-  if (!activeObj || !activeObj.arcballDragStart) return;
-  const [nx, ny] = toNDC(e.clientX, e.clientY);
-  const current  = screenToSphere(nx, ny);
-  activeObj.arcballDrag = arcballRotation(activeObj.arcballDragStart, current);
+  if (activeObj?.arcballDragStart) {
+    const [nx, ny] = toNDC(e.clientX, e.clientY);
+    activeObj.arcballDrag = arcballRotation(activeObj.arcballDragStart, screenToSphere(nx, ny));
+  } else if (camDragging) {
+    const dx = (e.clientX - camLastX) / canvas.clientWidth;
+    const dy = (e.clientY - camLastY) / canvas.clientHeight;
+    camera.azimuth   += dx * Math.PI * 2;
+    camera.elevation  = Math.max(-Math.PI / 2 + 0.01,
+                         Math.min( Math.PI / 2 - 0.01,
+                         camera.elevation + dy * Math.PI));
+    camLastX = e.clientX;
+    camLastY = e.clientY;
+  }
 });
 
-canvas.addEventListener("mouseup", () => {
+const endDrag = () => {
   const activeObj = (window as any).__getSelectedObject() as MeshObject | null;
-  if (!activeObj || !activeObj.arcballDragStart) return;
-  // Mouse_Release: last = current * last, reset current
-  activeObj.arcballBase      = quat.normalize(quat.multiply(activeObj.arcballDrag, activeObj.arcballBase));
-  activeObj.arcballDrag      = quat.identity();
-  activeObj.arcballDragStart = null;
-});
+  if (activeObj?.arcballDragStart) {
+    activeObj.arcballBase = quat.normalize(quat.multiply(activeObj.arcballDrag, activeObj.arcballBase));
+    activeObj.arcballDrag = quat.identity();
+    activeObj.arcballDragStart = null;
+  }
+  camDragging = false;
+};
+canvas.addEventListener("mouseup", endDrag);
+canvas.addEventListener("mouseleave", endDrag);
 
-canvas.addEventListener("mouseleave", () => {
-  const activeObj = (window as any).__getSelectedObject() as MeshObject | null;
-  if (!activeObj) return;
-  activeObj.arcballBase      = quat.normalize(quat.multiply(activeObj.arcballDrag, activeObj.arcballBase));
-  activeObj.arcballDrag      = quat.identity();
-  activeObj.arcballDragStart = null;
-});
+//orbital zoom
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  camera.distance *= 1 + e.deltaY * 0.001;
+  camera.distance = Math.max(0.5, camera.distance);
+}, { passive: false });
+
+
 
 
 
@@ -491,9 +544,10 @@ document.getElementById("obj-file-input")?.addEventListener("change", async (e) 
   obj.transform.tz = 0;
   sceneObjects.push(obj);
 
-  camera.position = [0, cy, radius * 2.5]; 
-  camera.yaw   = -Math.PI / 2;
-  camera.pitch = 0;
+  camera.target   = [cx, cy, cz];
+  camera.distance = radius * 2.5;
+  camera.elevation = 0.3;
+  camera.azimuth   = 0;
  
   console.log(`${file.name}: ${count/3} tris, centre=[${cx.toFixed(1)},${cy.toFixed(1)},${cz.toFixed(1)}], r=${radius.toFixed(1)}`);
   (e.target as HTMLInputElement).value = "";
@@ -518,12 +572,6 @@ document.getElementById("useTexture")?.addEventListener("change", (e) => {
   if (obj) obj.useTexture = (e.target as HTMLInputElement).checked ? 1 : 0;
 });
 
-
-const keys = new Set<string>();
-window.addEventListener("keydown", e => keys.add(e.key));
-window.addEventListener("keyup",   e => keys.delete(e.key));
-
-
 // Render loop
 let lastTime    = performance.now();
 const startTime = performance.now();
@@ -533,18 +581,15 @@ function frame(now: number) {
   lastTime = now;
   const t  = (now - startTime) / 1000;
 
-  camera.update(keys, dt);
-
   const aspect = canvas.width / canvas.height;
-  const proj   = mat4.perspective((60 * Math.PI) / 180, aspect, 0.1, 1500);//1500 instead 0f 100 so it fits
+  const proj   = mat4.perspective((60 * Math.PI) / 180, aspect, 0.1, 1000);//1000 instead 0f 100 so it fits
 
   const selObj = (window as any).__getSelectedObject() as MeshObject | null;
-  const target: [number,number,number] = selObj
-    ? selObj.worldCenter()
-    : [0, 0, 0];    
+  camera.target = selObj ? selObj.worldCenter() : [0, 0, 0]; 
 
-  const view = mat4.lookAt(camera.position, target, [0, 1, 0]);
-
+  const view   = camera.getViewMatrix();
+  const camPos = camera.getPosition();
+  
   const model  = mat4.translation(-meshCenter[0], -meshCenter[1], -meshCenter[2]);//c
   const normM  = mat4.normalMatrix(model);
   const mvp    = mat4.multiply(mat4.multiply(proj, view), model);
@@ -555,20 +600,10 @@ function frame(now: number) {
     lz = Math.sin(t * 0.8) * 4.5;
   }
 
-  const [or, og, ob] = hexToRgb(gui.objectColor);
+  //const [or, og, ob] = hexToRgb(gui.objectColor);
   const [lr, lg, lb] = hexToRgb(gui.lightColor);
 
-  uData.set(mvp,   0); uData.set(model, 16);  uData.set(normM, 32);
-  uData[48] = lx;          uData[49] = ly;          uData[50] = lz; uData[51] = 0;
-  uData[52] = lr;          uData[53] = lg;           uData[54] = lb; uData[55] = 0;
-  uData[56] = gui.ambient; uData[57] = gui.diffuse;  uData[58] = gui.specular; uData[59] = gui.shininess;
-  uData[60] = camera.position[0]; uData[61] = camera.position[1]; uData[62] = camera.position[2];
-  uData32[63] = gui.modelId;//<-must be u32 bits
-  uData[64] = or; uData[65] = og; uData[66] = ob;  uData[67] = t;
-
-  device.queue.writeBuffer(uniformBuffer, 0, uArrayBuf);
-
-  const encoder = device.createCommandEncoder();
+   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
@@ -581,9 +616,10 @@ function frame(now: number) {
     },
   });
 
+
   pass.setPipeline(pipeline);
   for (const obj of sceneObjects) {
-    obj.uploadUniforms(proj, view, t, lx, ly, lz, lr, lg, lb, or, og, ob);
+    obj.uploadUniforms(proj, view, t, lx, ly, lz, lr, lg, lb, camPos);
     pass.setBindGroup(0, obj.bindGroup);
     pass.setVertexBuffer(0, obj.vertexBuffer);
     pass.draw(obj.drawCount);
