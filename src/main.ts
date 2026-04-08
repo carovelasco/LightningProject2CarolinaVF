@@ -2,9 +2,10 @@
 
 import "./style.css";
 import shaderCode from "./shader.wgsl?raw";
+import normalShaderCode from "./shader_normals.wgsl?raw";
 //import { Camera } from "./camera";
 import { mat4, quat, screenToSphere, arcballRotation } from "./math";
-import type { Vec3, Quat  } from "./math";
+import type { Vec3, Quat, Mat4 } from "./math";
 import { gui, hexToRgb, initGUI, addObject, getSelectedIndex } from "./gui";
 
 
@@ -121,6 +122,9 @@ const format  = navigator.gpu.getPreferredCanvasFormat();
 
 let depthTexture: GPUTexture | null = null;
 
+// G-buffer normal texture — rgba16float, same size as canvas
+let gbufNormalTex: GPUTexture | null = null;
+
 function resize() {
   canvas.width  = Math.max(1, Math.floor(window.innerWidth  * devicePixelRatio));
   canvas.height = Math.max(1, Math.floor(window.innerHeight * devicePixelRatio));
@@ -130,6 +134,14 @@ function resize() {
     size: [canvas.width, canvas.height], 
     format: "depth24plus",
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+
+  // recreate gbuffer on resize
+  gbufNormalTex?.destroy();
+  gbufNormalTex = device.createTexture({
+    size: [canvas.width, canvas.height],
+    format: "rgba16float",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
   });
 }
 resize();
@@ -237,19 +249,42 @@ const uArrayBuf = new ArrayBuffer(UNIFORM_SIZE);
 const uData     = new Float32Array(uArrayBuf);
 const uData32   = new Uint32Array(uArrayBuf);
 
+// ── Normal pass uniform — only needs mvp / model / normalMat (48 floats = 192 B)
+const NORMAL_UNIFORM_SIZE = 192;
+
+const normalBGL = device.createBindGroupLayout({
+  entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+  ],
+});
+
 const bindGroupLayout = device.createBindGroupLayout({
   entries: [
     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
     { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+    { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+    { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
   ],
 });
 
 const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "repeat" });
+const gbufSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
 
 
 // Pipeline
 const shader = device.createShaderModule({ label: "Lighting Shader", code: shaderCode });
+const normalShader = device.createShaderModule({ label: "Normal Shader", code: normalShaderCode });
+
+const vertexBufferLayout: GPUVertexBufferLayout = {
+  arrayStride: 11 * 4,//it was8 bfre
+  attributes: [
+    { shaderLocation: 0, offset: 0,     format: "float32x3" }, // position
+    { shaderLocation: 1, offset: 3 * 4, format: "float32x3" }, // normal
+    { shaderLocation: 2, offset: 6 * 4, format: "float32x3" }, // barycentric
+    { shaderLocation: 3, offset: 9 * 4, format: "float32x2" }, // uv
+  ],
+};
 
 const pipeline = device.createRenderPipeline({
   label: "Lighting Pipeline",
@@ -257,17 +292,23 @@ const pipeline = device.createRenderPipeline({
   vertex: {
     module: shader,
     entryPoint: "vs_main",
-    buffers: [{
-      arrayStride: 11 * 4,//it was8 bfre
-      attributes: [
-        { shaderLocation: 0, offset: 0,     format: "float32x3" }, // position
-        { shaderLocation: 1, offset: 3 * 4, format: "float32x3" }, // normal
-        { shaderLocation: 2, offset: 6 * 4, format: "float32x3" }, // barycentric
-        { shaderLocation: 3, offset: 9 * 4, format: "float32x2" }, // uv
-      ],
-    }],
+    buffers: [vertexBufferLayout],
   },
   fragment: { module: shader, entryPoint: "fs_main", targets: [{ format }] },
+  primitive: { topology: "triangle-list", cullMode: "back" },
+  depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+});
+
+// Normal G-buffer pipeline
+const normalPipeline = device.createRenderPipeline({
+  label: "Normal Pipeline",
+  layout: device.createPipelineLayout({ bindGroupLayouts: [normalBGL] }),
+  vertex: {
+    module: normalShader,
+    entryPoint: "vs_normals",
+    buffers: [vertexBufferLayout],
+  },
+  fragment: { module: normalShader, entryPoint: "fs_normals", targets: [{ format: "rgba16float" }] },
   primitive: { topology: "triangle-list", cullMode: "back" },
   depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
 });
@@ -326,7 +367,9 @@ class MeshObject {
   drawCount:    number;
   center:       [number,number,number];
   uniformBuf:   GPUBuffer;
+  normalUniformBuf: GPUBuffer;
   bindGroup:    GPUBindGroup;
+  normalBindGroup: GPUBindGroup;
   transform = { tx:0, ty:0, tz:0, rx:0, ry:0, rz:0, sx:1, sy:1, sz:1 };
   material = { ambient:   0.12, diffuse:   0.75, specular:  0.60, shininess: 32, color:     "#4a9eff" as string,};
   boundingRadius: number = 1;
@@ -336,6 +379,9 @@ class MeshObject {
   private _uab  = new ArrayBuffer(UNIFORM_SIZE);
   private _uf32 = new Float32Array(this._uab);
   private _uu32 = new Uint32Array(this._uab);
+
+  private _nab  = new ArrayBuffer(NORMAL_UNIFORM_SIZE);
+  private _nf32 = new Float32Array(this._nab);
  
   constructor(verts: Float32Array, count: number, center: [number,number,number] = [0,0,0], radius = 1) {
     this.drawCount = count;
@@ -351,8 +397,15 @@ class MeshObject {
       size: UNIFORM_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+
+    this.normalUniformBuf = device.createBuffer({
+      size: NORMAL_UNIFORM_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
     this.texture   = createDefaultTexture();
     this.bindGroup = this.createBindGroup();
+    this.normalBindGroup = this.createNormalBindGroup();
 }
   // Arcball state
   arcballBase: Quat = quat.identity();      
@@ -420,18 +473,40 @@ class MeshObject {
     this._uu32[68] = this.useTexture;
  
     device.queue.writeBuffer(this.uniformBuf, 0, this._uab);
+
+    // normal pass uniform — just mvp / model / normalMat
+    this._nf32.set(mvp,   0);
+    this._nf32.set(model, 16);
+    this._nf32.set(normM, 32);
+    device.queue.writeBuffer(this.normalUniformBuf, 0, this._nab);
   }
  
   private createBindGroup(): GPUBindGroup {
-  return device.createBindGroup({
-    layout: bindGroupLayout,
-    entries: [
-      { binding: 0, resource: { buffer: this.uniformBuf } },
-      { binding: 1, resource: sampler },
-      { binding: 2, resource: this.texture.createView() },
-    ],
-  });
-}
+    return device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuf } },
+        { binding: 1, resource: sampler },
+        { binding: 2, resource: this.texture.createView() },
+        { binding: 3, resource: gbufSampler },
+        { binding: 4, resource: gbufNormalTex!.createView() },
+      ],
+    });
+  }
+
+  private createNormalBindGroup(): GPUBindGroup {
+    return device.createBindGroup({
+      layout: normalBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.normalUniformBuf } },
+      ],
+    });
+  }
+
+  // called after resize so bind group 4 points to the new gbuffer texture
+  rebuildBindGroups() {
+    this.bindGroup = this.createBindGroup();
+  }
 
 setTexture(tex: GPUTexture) {
   this.texture.destroy();
@@ -443,6 +518,7 @@ setTexture(tex: GPUTexture) {
   destroy() {
     this.vertexBuffer.destroy();
     this.uniformBuf.destroy();
+    this.normalUniformBuf.destroy();
   }
 }
 
@@ -521,8 +597,10 @@ canvas.addEventListener("wheel", e => {
 }, { passive: false });
 
 
-
-
+// rebuild bind groups for all objects after resize so gbuffer view is fresh
+window.addEventListener("resize", () => {
+  for (const obj of sceneObjects) obj.rebuildBindGroups();
+});
 
 
 
@@ -618,29 +696,59 @@ function frame(now: number) {
   //const [or, og, ob] = hexToRgb(gui.objectColor);
   const [lr, lg, lb] = hexToRgb(gui.lightColor);
 
-   const encoder = device.createCommandEncoder();
-  const pass = encoder.beginRenderPass({
-    colorAttachments: [{
-      view: context.getCurrentTexture().createView(),
-      clearValue: { r: 0.08, g: 0.08, b: 0.12, a: 1 },
-      loadOp: "clear", storeOp: "store",
-    }],
-    depthStencilAttachment: {
-      view: depthTexture!.createView(),
-      depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store",
-    },
-  });
-
-
-  pass.setPipeline(pipeline);
+  // upload uniforms for all objects before any pass
   for (const obj of sceneObjects) {
     obj.uploadUniforms(proj, view, t, lx, ly, lz, lr, lg, lb, camPos);
-    pass.setBindGroup(0, obj.bindGroup);
-    pass.setVertexBuffer(0, obj.vertexBuffer);
-    pass.draw(obj.drawCount);
   }
 
-  pass.end();
+  const encoder = device.createCommandEncoder();
+
+  // ── Pass 1: render world-space normals into G-buffer texture
+  {
+    const normalPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: gbufNormalTex!.createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: "clear", storeOp: "store",
+      }],
+      depthStencilAttachment: {
+        view: depthTexture!.createView(),
+        depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store",
+      },
+    });
+    normalPass.setPipeline(normalPipeline);
+    for (const obj of sceneObjects) {
+      normalPass.setBindGroup(0, obj.normalBindGroup);
+      normalPass.setVertexBuffer(0, obj.vertexBuffer);
+      normalPass.draw(obj.drawCount);
+    }
+    normalPass.end();
+  }
+
+  // ── Pass 2: main shading pass reads from G-buffer
+  {
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: context.getCurrentTexture().createView(),
+        clearValue: { r: 0.08, g: 0.08, b: 0.12, a: 1 },
+        loadOp: "clear", storeOp: "store",
+      }],
+      depthStencilAttachment: {
+        view: depthTexture!.createView(),
+        depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store",
+      },
+    });
+
+    pass.setPipeline(pipeline);
+    for (const obj of sceneObjects) {
+      pass.setBindGroup(0, obj.bindGroup);
+      pass.setVertexBuffer(0, obj.vertexBuffer);
+      pass.draw(obj.drawCount);
+    }
+
+    pass.end();
+  }
+
   device.queue.submit([encoder.finish()]);
   requestAnimationFrame(frame);
 }

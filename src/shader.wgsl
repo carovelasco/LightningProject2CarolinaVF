@@ -3,7 +3,7 @@
 // model_id values:
 //   0 = Gouraud
 //   1 = Phong
-//   2 = Normals
+//   2 = Normals (visualize gbuffer)
 //   3 = Wireframe
 //   4 = Depth
 //   5 = Texture
@@ -46,8 +46,10 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
-@group(0) @binding(1) var tex_samp : sampler;
-@group(0) @binding(2) var tex_img  : texture_2d<f32>;
+@group(0) @binding(1) var tex_samp   : sampler;
+@group(0) @binding(2) var tex_img    : texture_2d<f32>;
+@group(0) @binding(3) var gbuf_samp  : sampler;
+@group(0) @binding(4) var gbuf_normals : texture_2d<f32>;
 
 struct VSIn {
   @location(0) position    : vec3<f32>,
@@ -64,7 +66,7 @@ struct VSOut {
   @location(3) gouraudColor  : vec3<f32>,
   @location(4) barycentric   : vec3<f32>,
   @location(5) depth: f32,
-
+  @location(6) clipUV        : vec2<f32>,
 };
 
 fn gouraudLighting(N: vec3<f32>, vertWorldPos: vec3<f32>) -> vec3<f32> {
@@ -132,6 +134,8 @@ fn vs_main(input: VSIn) -> VSOut {
   out.barycentric = input.barycentric;
   out.depth = out.clipPos.z / out.clipPos.w;
 
+  // clip-space UV for sampling the G-buffer by screen position
+  out.clipUV = out.clipPos.xy / out.clipPos.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
 
   if u.model_id == 0u {
     out.gouraudColor = gouraudLighting(out.worldNormal, out.worldPos);
@@ -145,7 +149,14 @@ fn vs_main(input: VSIn) -> VSOut {
 @fragment
 fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
   var color: vec3<f32>;
-  let N = normalize(input.worldNormal);
+
+  // read normal from G-buffer and decode from [0,1] back to [-1,1]
+  let gbufRaw = textureSample(gbuf_normals, gbuf_samp, input.clipUV).rgb;
+  let N_gbuf  = normalize(gbufRaw * 2.0 - vec3<f32>(1.0));
+
+  // fallback to interpolated vertex normal when gbuffer not ready
+  let N_vert  = normalize(input.worldNormal);
+  let N       = select(N_vert, N_gbuf, dot(N_gbuf, N_gbuf) > 0.01);
 
   var baseColor = u.objectColor;
   if u.use_texture == 1u {
@@ -160,10 +171,12 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
       }
     }
     case 1u: {
+      // Phong reads N from the G-buffer
       color = phongLighting(N, input.worldPos, baseColor);
     }
     case 2u: {
-      color = N * 0.5 + vec3<f32>(0.5);
+      // visualize the G-buffer directly
+      color = gbufRaw;
     }
     case 3u: {
       let edgeFactor = wireframeEdgeFactor(input.barycentric);
