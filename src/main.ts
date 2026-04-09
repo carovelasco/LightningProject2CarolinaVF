@@ -591,7 +591,9 @@ function frame(now: number) {
   const t  = (now - startTime) / 1000;
 
   const aspect = canvas.width / canvas.height;
-  const proj   = mat4.perspective((60 * Math.PI) / 180, aspect, 0.1, 3000);//3000 instead 0f 100 so it fits
+  const near = Math.max(0.01, camera.distance * 0.01);
+  const far  = camera.distance + 500;
+  const proj = mat4.perspective((60 * Math.PI) / 180, aspect, near, far);
 
   const selObj = (window as any).__getSelectedObject() as MeshObject | null;
   camera.target = selObj ? selObj.worldCenter() : [0, 0, 0]; 
