@@ -519,9 +519,8 @@ canvas.addEventListener("mouseleave", endDrag);
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
   camera.distance *= 1 + e.deltaY * 0.001;
-  camera.distance = Math.max(0.5, camera.distance);
+  camera.distance = Math.max(0.01, Math.min(camera.distance, 10000));
 }, { passive: false });
-
 
 //defalt cube
 {
@@ -591,10 +590,10 @@ function frame(now: number) {
   const t  = (now - startTime) / 1000;
 
   const aspect = canvas.width / canvas.height;
-  const near = Math.max(0.01, camera.distance * 0.01);
-  const far  = camera.distance + 500;
+  const near = Math.max(0.001, camera.distance * 0.01);
+  const far  = camera.distance * 100 + 1000;
   const proj = mat4.perspective((60 * Math.PI) / 180, aspect, near, far);
-
+ 
   const selObj = (window as any).__getSelectedObject() as MeshObject | null;
   camera.target = selObj ? selObj.worldCenter() : [0, 0, 0]; 
 
