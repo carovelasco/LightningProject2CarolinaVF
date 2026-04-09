@@ -263,14 +263,10 @@ const bindGroupLayout = device.createBindGroupLayout({
     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
     { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-    { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
-    { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
   ],
 });
 
 const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "repeat" });
-const gbufSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-
 
 // Pipeline
 const shader = device.createShaderModule({ label: "Lighting Shader", code: shaderCode });
@@ -488,8 +484,6 @@ class MeshObject {
         { binding: 0, resource: { buffer: this.uniformBuf } },
         { binding: 1, resource: sampler },
         { binding: 2, resource: this.texture.createView() },
-        { binding: 3, resource: gbufSampler },
-        { binding: 4, resource: gbufNormalTex!.createView() },
       ],
     });
   }
@@ -720,6 +714,7 @@ function frame(now: number) {
     for (const obj of sceneObjects) {
       normalPass.setBindGroup(0, obj.normalBindGroup);
       normalPass.setVertexBuffer(0, obj.vertexBuffer);
+      
       normalPass.draw(obj.drawCount);
     }
     normalPass.end();
