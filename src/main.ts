@@ -591,8 +591,8 @@ function frame(now: number) {
   const t  = (now - startTime) / 1000;
 
   const aspect = canvas.width / canvas.height;
-  const near = Math.max(0.01, camera.distance * 0.01);
-  const far  = camera.distance + 500;
+  const near = 0.015;
+  const far  = 700;
   const proj = mat4.perspective((60 * Math.PI) / 180, aspect, near, far);
 
   const selObj = (window as any).__getSelectedObject() as MeshObject | null;
