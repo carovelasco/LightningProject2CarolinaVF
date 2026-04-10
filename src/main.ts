@@ -359,7 +359,7 @@ class MeshObject {
       size: verts.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    device.queue.writeBuffer(this.vertexBuffer, 0, verts);
+ device.queue.writeBuffer(this.vertexBuffer, 0, verts.buffer.slice(0) as ArrayBuffer, verts.byteOffset, verts.byteLength);
  
     this.uniformBuf = device.createBuffer({
       size: UNIFORM_SIZE,

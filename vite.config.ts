@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/<LightningProject2CarolinaVF>/",
+  base:  "/LightningProject2CarolinaVF/",
   build: {
     rollupOptions: {
       input: {
