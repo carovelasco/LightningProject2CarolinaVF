@@ -198,22 +198,6 @@ function generateSphere(stacks: number, slices: number): { vd: Float32Array; id:
 }
 
 
-// Geometry buffers — rebuilt when the user switches shape
-let activeShape: "cube" | "sphere" = "cube";
-let meshCenter: [number,number,number] = [0,0,0];
-
-function buildVertexBuffer(shape: "cube" | "sphere"): { buf: GPUBuffer; count: number } {
-  meshCenter = [0,0,0];
-
-  const { vd, id } = shape === "cube" ? generateCube() : generateSphere(64, 64);
-  const { verts, count } = expandToFlat(vd, id);
-  const buf = device.createBuffer({
-    size: verts.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(buf, 0, verts);
-  return { buf, count };
-}
 
 //let { buf: vertexBuffer, count: vertexCount } = buildVertexBuffer("cube");
 
@@ -237,14 +221,6 @@ function buildVertexBuffer(shape: "cube" | "sphere"): { buf: GPUBuffer; count: n
 // ─────────────────────────────────────────────────────────────────────────────
 const UNIFORM_SIZE = 304;
 
-const uniformBuffer = device.createBuffer({
-  size: UNIFORM_SIZE,
-  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-});
-
-const uArrayBuf = new ArrayBuffer(UNIFORM_SIZE);
-const uData     = new Float32Array(uArrayBuf);
-const uData32   = new Uint32Array(uArrayBuf);
 
 // ── Normal pass uniform — only needs mvp / model / normalMat (48 floats = 192 B)
 const NORMAL_UNIFORM_SIZE = 192;
@@ -443,7 +419,6 @@ class MeshObject {
     lr: number, lg: number, lb: number,
     camPos: [number,number,number], 
   ) {
-    const [cx, cy, cz] = this.center;
     const model  = this.buildModel();
     //const model = mat4.multiply(
     //mat4.translation(this.transform.tx - cx, this.transform.ty - cy, this.transform.tz - cz),mat4.identity());
@@ -651,12 +626,11 @@ document.getElementById("useTexture")?.addEventListener("change", (e) => {
 });
 
 // Render loop
-let lastTime    = performance.now();
+let _lastTime    = performance.now();
 const startTime = performance.now();
 
 function frame(now: number) {
-  const dt = Math.min(0.033, (now - lastTime) / 1000);
-  lastTime = now;
+  _lastTime = now;
   const t  = (now - startTime) / 1000;
 
   const aspect = canvas.width / canvas.height;
@@ -667,10 +641,6 @@ function frame(now: number) {
 
   const view   = camera.getViewMatrix();
   const camPos = camera.getPosition();
-  
-  const model  = mat4.translation(-meshCenter[0], -meshCenter[1], -meshCenter[2]);//c
-  const normM  = mat4.normalMatrix(model);
-  const mvp    = mat4.multiply(mat4.multiply(proj, view), model);
 
   let lx = gui.lightX, ly = gui.lightY, lz = gui.lightZ;
   if (gui.autoRotLight) {
