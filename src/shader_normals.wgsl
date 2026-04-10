@@ -1,7 +1,3 @@
-// shader_normals.wgsl
-// First pass: writes world-space normals to the G-buffer texture
-// RGB = XYZ normal, encoded as N * 0.5 + 0.5 to map [-1,1] -> [0,1]
-
 struct NormalUniforms {
   mvp       : mat4x4<f32>,
   model     : mat4x4<f32>,

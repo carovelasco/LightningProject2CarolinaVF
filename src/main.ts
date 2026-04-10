@@ -3,7 +3,6 @@
 import "./style.css";
 import shaderCode from "./shader.wgsl?raw";
 import normalShaderCode from "./shader_normals.wgsl?raw";
-//import { Camera } from "./camera";
 import { mat4, quat, screenToSphere, arcballRotation } from "./math";
 import type { Vec3, Quat, Mat4 } from "./math";
 import { gui, hexToRgb, initGUI, addObject, getSelectedIndex } from "./gui";
@@ -308,7 +307,6 @@ const normalPipeline = device.createRenderPipeline({
 });
 
 // Camera when no orbital: const camera = new Camera();camera.position = [0, 0, 5];
-// Cámara orbital — reemplaza la Camera de WASD
 const camera = {
   azimuth:   0,
   elevation: 0.3,
@@ -685,7 +683,6 @@ function frame(now: number) {
     lz = cp[2];
   }
 
-  //const [or, og, ob] = hexToRgb(gui.objectColor);
   const [lr, lg, lb] = hexToRgb(gui.lightColor);
 
   // upload uniforms for all objects before any pass
@@ -695,7 +692,6 @@ function frame(now: number) {
 
   const encoder = device.createCommandEncoder();
 
-  // ── Pass 1: render world-space normals into G-buffer texture
   {
     const normalPass = encoder.beginRenderPass({
       colorAttachments: [{
@@ -718,7 +714,7 @@ function frame(now: number) {
     normalPass.end();
   }
 
-  // ── Pass 2: main shading pass reads from G-buffer
+  //  main shading pass reads from G-buffer
   {
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
